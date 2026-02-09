@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PropertyPulse - AI Renovation Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .reasoning-line { animation: typeIn 0.2s ease-out; }
+        @keyframes typeIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        .cursor { animation: blink 1s infinite; }
+        .terminal-scroll::-webkit-scrollbar { width: 8px; }
+        .terminal-scroll::-webkit-scrollbar-track { background: #f1f5f9; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .terminal-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        /* Slider fix - prevent flickering */
+        .slider-container { position: relative; overflow: hidden; }
+        .slider-container img { pointer-events: none; user-select: none; -webkit-user-drag: none; }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Fira Code', 'Monaco', 'Consolas', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen overflow-hidden">
+    <div x-data="propertyPulse()" x-cloak class="h-full flex flex-col">
+
+        <!-- Top Bar -->
+        <header class="flex-shrink-0 bg-white border-b border-slate-200 px-6 py-3 shadow-sm">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <h1 class="text-xl font-semibold text-slate-800">PropertyPulse</h1>
+                    <span class="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded">Gemini 3 Powered</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span x-show="jobId && !results" class="flex items-center gap-2 text-sm text-emerald-600">
+                        <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                        Processing
+                    </span>
+                    <button x-show="results || jobId" @click="reset()"
+                            class="text-sm text-slate-500 hover:text-slate-800 transition flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        New Analysis
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex overflow-hidden">
+
+            <!-- Left Sidebar - Input & Info -->
+            <aside class="w-80 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col">
+
+                <!-- URL Input -->
+                <div class="p-4 border-b border-slate-200">
+                    <label class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">Property URL</label>
+                    <div class="flex flex-col gap-2">
+                        <input
+                            type="url"
+                            x-model="url"
+                            :disabled="jobId"
+                            placeholder="rightmove.co.uk/properties/..."
+                            class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none disabled:opacity-50"
+                            @keyup.enter="startAnalysis"
+                        >
+                        <!-- Analyze or Cancel button -->
+                        <button
+                            x-show="!jobId || results"
+                            @click="startAnalysis"
+                            :disabled="loading || !url"
+                            class="w-full px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                        >
+                            <span x-show="!loading">
+                                <svg class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                                </svg>
+                                Analyze
+                            </span>
+                            <span x-show="loading" class="flex items-center gap-2">
+                                <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                </svg>
+                                Starting...
+                            </span>
+                        </button>
+                        <!-- Cancel button when processing -->
+                        <button
+                            x-show="jobId && !results"
+                            @click="cancelAnalysis"
+                            class="w-full px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition flex items-center justify-center gap-2"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Property Info (only during processing, not when results ready) -->
+                <div x-show="propertyInfo && !results" class="p-4 border-b border-slate-200">
+                    <label class="block text-xs font-medium text-slate-500 mb-3 uppercase tracking-wider">Property</label>
+                    <div class="space-y-2">
+                        <div class="text-slate-800 font-medium text-sm leading-tight" x-text="propertyInfo?.address"></div>
+                        <div class="text-emerald-600 font-semibold" x-text="propertyInfo?.price"></div>
+                        <div class="flex gap-3 text-xs text-slate-500">
+                            <span x-text="(propertyInfo?.bedrooms || 0) + ' beds'"></span>
+                            <span x-text="(propertyInfo?.bathrooms || 0) + ' baths'"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Progress -->
+                <div x-show="jobId && !results" class="p-4 border-b border-slate-200">
+                    <div class="flex justify-between text-xs text-slate-500 mb-2">
+                        <span x-text="currentStage || 'Initializing...'"></span>
+                        <span x-text="progress + '%'"></span>
+                    </div>
+                    <div class="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div class="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-500 rounded-full"
+                             :style="'width: ' + progress + '%'"></div>
+                    </div>
+                </div>
+
+                <!-- Recent Jobs -->
+                <div class="flex-1 overflow-y-auto p-4 terminal-scroll">
+                    <label class="block text-xs font-medium text-slate-500 mb-3 uppercase tracking-wider">Recent</label>
+                    <div class="space-y-2">
+                        <template x-for="job in recentJobs.slice(0, 5)" :key="job.job_id">
+                            <div class="p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer transition group relative">
+                                <div @click="loadJob(job.job_id)" class="pr-6">
+                                    <div class="text-xs text-slate-700 truncate" x-text="job.address || 'Processing...'"></div>
+                                    <div class="flex justify-between items-center mt-1">
+                                        <span class="text-xs text-slate-500" x-text="job.price"></span>
+                                        <span class="w-2 h-2 rounded-full"
+                                              :class="job.status === 'complete' ? 'bg-emerald-500' : job.status === 'error' ? 'bg-red-500' : 'bg-amber-500'"></span>
+                                    </div>
+                                </div>
+                                <!-- Delete button -->
+                                <button @click.stop="deleteJob(job.job_id)"
+                                        class="absolute top-2 right-2 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Main Terminal Area -->
+            <div class="flex-1 flex flex-col bg-slate-100">
+
+                <!-- Terminal Header -->
+                <div class="flex-shrink-0 bg-slate-200 border-b border-slate-300 px-4 py-2 flex items-center gap-2">
+                    <span class="text-xs text-slate-600 font-mono font-medium">AI Reasoning Engine</span>
+                    <span class="text-xs text-slate-400 ml-auto" x-text="reasoningSteps.length + ' operations'"></span>
+                </div>
+
+                <!-- Terminal Content -->
+                <div x-show="!results" class="flex-1 overflow-y-auto p-4 font-mono text-sm terminal-scroll bg-white" x-ref="reasoningLog">
+                    <!-- Welcome message when no job -->
+                    <div x-show="!jobId" class="flex flex-col items-center justify-center h-full text-center px-8">
+                        <div class="text-5xl mb-4">🏠</div>
+                        <h2 class="text-2xl font-semibold text-slate-700 mb-2">Ready to analyze</h2>
+                        <p class="text-slate-500 max-w-md">
+                            Paste a Rightmove property URL to get an AI-powered renovation assessment with cost estimates and visualizations.
+                        </p>
+                    </div>
+
+                    <!-- Reasoning Steps -->
+                    <div x-show="jobId" class="space-y-1">
+                        <template x-for="(step, index) in reasoningSteps" :key="index">
+                            <div class="reasoning-line flex items-start gap-3 py-0.5"
+                                 :class="{
+                                     'text-emerald-600': step.type === 'success',
+                                     'text-red-600': step.type === 'error',
+                                     'text-amber-600': step.type === 'warning',
+                                     'text-cyan-600': step.type === 'thinking' || step.type === 'analyzing',
+                                     'text-violet-600': step.type === 'strategy' || step.type === 'decision',
+                                     'text-pink-600': step.type === 'image',
+                                     'text-orange-600': step.type === 'cost',
+                                     'text-slate-600': !['success','error','warning','thinking','analyzing','strategy','decision','image','cost'].includes(step.type)
+                                 }">
+                                <span class="text-slate-400 w-20 flex-shrink-0" x-text="step.time"></span>
+                                <span class="w-5 flex-shrink-0" x-text="step.emoji"></span>
+                                <div class="flex-1 min-w-0">
+                                    <span x-text="step.title"></span>
+                                    <span x-show="step.detail" class="text-slate-500 ml-2" x-text="'→ ' + step.detail"></span>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Active cursor -->
+                        <div x-show="!results" class="flex items-center gap-3 py-0.5 text-slate-500">
+                            <span class="text-slate-400 w-20 flex-shrink-0"></span>
+                            <span class="w-5 flex-shrink-0"></span>
+                            <span class="cursor text-emerald-600">_</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results View (replaces terminal when complete) -->
+                <div x-show="results" class="flex-1 overflow-y-auto p-6 terminal-scroll bg-slate-50">
+                    <div class="max-w-5xl mx-auto space-y-6">
+
+                        <!-- Property Header -->
+                        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+                            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                <div>
+                                    <h2 class="text-xl font-semibold text-slate-800" x-text="results?.property?.address"></h2>
+                                    <div class="flex flex-wrap items-center gap-3 mt-2 text-sm text-slate-500">
+                                        <span class="font-medium text-emerald-600 text-lg" x-text="results?.property?.price_text"></span>
+                                        <span class="text-slate-300">|</span>
+                                        <span x-text="(results?.property?.bedrooms || 0) + ' bedrooms'"></span>
+                                        <span class="text-slate-300">|</span>
+                                        <span x-text="(results?.property?.bathrooms || 0) + ' bathrooms'"></span>
+                                        <span x-show="results?.costs?.property_info?.total_sqft" class="text-slate-300">|</span>
+                                        <span x-show="results?.costs?.property_info?.total_sqft" x-text="results?.costs?.property_info?.total_sqft + ' sqft'"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Estimated Cost Summary -->
+                        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+                            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                <div>
+                                    <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider mb-3">Estimated Renovation Cost</h3>
+                                    <div class="flex items-end gap-6">
+                                        <div>
+                                            <div class="text-xs text-slate-500">Low</div>
+                                            <div class="text-xl font-semibold text-slate-600" x-text="'£' + ((results?.costs?.grand_total?.low || 0) / 1000).toFixed(0) + 'k'"></div>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs text-emerald-600 font-medium">Mid Estimate</div>
+                                            <div class="text-3xl font-bold text-emerald-600" x-text="'£' + ((results?.costs?.grand_total?.mid || 0) / 1000).toFixed(0) + 'k'"></div>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs text-slate-500">High</div>
+                                            <div class="text-xl font-semibold text-amber-600" x-text="'£' + ((results?.costs?.grand_total?.high || 0) / 1000).toFixed(0) + 'k'"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-4">
+                                    <div class="text-center px-4 py-2 bg-slate-50 rounded-lg">
+                                        <div class="text-xs text-slate-500">Condition</div>
+                                        <span class="px-2 py-0.5 rounded-full text-sm font-medium"
+                                              :class="getConditionClass(results?.analysis?.overall_assessment?.average_condition || 5)"
+                                              x-text="getConditionLabel(results?.analysis?.overall_assessment?.average_condition || 5)"></span>
+                                    </div>
+                                    <div class="text-center px-4 py-2 bg-slate-50 rounded-lg">
+                                        <div class="text-xs text-slate-500">Cost/sqft</div>
+                                        <div class="text-sm font-semibold text-slate-700" x-text="'£' + (results?.costs?.cost_per_sqft?.mid || 0)"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Category Breakdown -->
+                        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+                            <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Cost Breakdown</h3>
+                            <div class="space-y-3">
+                                <template x-for="(amounts, category) in (results?.costs?.by_category || {})" :key="category">
+                                    <div class="flex items-center gap-4">
+                                        <div class="w-32 text-sm text-slate-600" x-text="category"></div>
+                                        <div class="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                            <div class="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full transition-all"
+                                                 :style="'width: ' + Math.min(100, (amounts.mid / (results?.costs?.total?.mid || 1)) * 100) + '%'"></div>
+                                        </div>
+                                        <div class="w-24 text-right text-sm font-medium text-slate-700" x-text="'£' + (amounts.mid || 0).toLocaleString()"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Room Cards -->
+                        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <template x-for="(room, key) in results?.analysis || {}" :key="key">
+                                <div x-show="room.room_type && key !== 'overall_assessment' && key !== 'floorplan_analysis'"
+                                     class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                                    <div class="flex justify-between items-start mb-3">
+                                        <span class="font-medium text-slate-700 capitalize" x-text="room.room_type?.replace('_', ' ')"></span>
+                                        <span class="px-2 py-0.5 text-xs font-medium rounded-full"
+                                              :class="getConditionClass(room.condition_score)"
+                                              x-text="getConditionLabel(room.condition_score)"></span>
+                                    </div>
+                                    <div x-show="room.issues?.length" class="text-xs text-slate-500 space-y-1">
+                                        <template x-for="issue in (room.issues || []).slice(0, 2)" :key="issue">
+                                            <div class="flex items-start gap-1">
+                                                <span class="text-red-500">•</span>
+                                                <span x-text="issue"></span>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Visualizations -->
+                        <div x-show="Object.keys(results?.after_images || {}).length > 0">
+                            <h3 class="text-sm font-medium text-slate-500 uppercase tracking-wider mb-4">Renovations</h3>
+                            <div class="grid md:grid-cols-2 gap-6">
+                                <template x-for="(img, key) in (results?.after_images || {})" :key="key">
+                                    <div x-show="img.generated_image" class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                        <!-- Before/After Slider - Fixed version -->
+                                        <div class="relative aspect-video slider-container"
+                                             x-data="{ sliderPos: 50, dragging: false, containerWidth: 0 }"
+                                             x-init="containerWidth = $el.offsetWidth; new ResizeObserver(() => containerWidth = $el.offsetWidth).observe($el)"
+                                             @mousedown="dragging = true"
+                                             @mouseup.window="dragging = false"
+                                             @mousemove.window="if(dragging) { sliderPos = Math.max(0, Math.min(100, ($event.clientX - $el.getBoundingClientRect().left) / $el.offsetWidth * 100)) }"
+                                             @touchstart="dragging = true"
+                                             @touchend.window="dragging = false"
+                                             @touchmove.window.prevent="if(dragging) { sliderPos = Math.max(0, Math.min(100, ($event.touches[0].clientX - $el.getBoundingClientRect().left) / $el.offsetWidth * 100)) }">
+
+                                            <!-- After image (full, underneath) -->
+                                            <img :src="'data:image/jpeg;base64,' + img.generated_image"
+                                                 class="absolute inset-0 w-full h-full object-cover" alt="After"
+                                                 draggable="false">
+
+                                            <!-- Before image (clipped from right using clip-path) -->
+                                            <img :src="'data:image/jpeg;base64,' + img.original_image"
+                                                 class="absolute inset-0 w-full h-full object-cover"
+                                                 :style="'clip-path: inset(0 ' + (100 - sliderPos) + '% 0 0)'"
+                                                 alt="Before"
+                                                 draggable="false">
+
+                                            <!-- Slider line and handle -->
+                                            <div class="absolute inset-y-0 w-0.5 bg-white shadow-lg z-10 cursor-ew-resize"
+                                                 :style="'left: calc(' + sliderPos + '% - 1px)'">
+                                                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center cursor-ew-resize">
+                                                    <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" transform="rotate(-90 12 12)"/>
+                                                    </svg>
+                                                </div>
+                                            </div>
+
+                                            <div class="absolute bottom-2 left-2 px-2 py-1 bg-black/70 text-white text-xs rounded pointer-events-none">Before</div>
+                                            <div class="absolute bottom-2 right-2 px-2 py-1 bg-black/70 text-white text-xs rounded pointer-events-none">After</div>
+                                        </div>
+
+                                        <div class="p-3 flex items-center justify-between">
+                                            <span class="text-sm font-medium text-slate-700 capitalize" x-text="img.room_type?.replace('_', ' ')"></span>
+                                            <button @click="openRefine(key, img.renovation_description)"
+                                                    class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-xs text-slate-600 rounded-lg transition flex items-center gap-1">
+                                                <span>✨</span> Refine
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Refine Modal -->
+        <div x-show="refineModalOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+            <div @click.outside="refineModalOpen = false"
+                 class="bg-white border border-slate-200 rounded-xl w-full max-w-md shadow-2xl">
+                <div class="p-4 border-b border-slate-200">
+                    <h3 class="text-lg font-medium text-slate-800">Refine Visualization</h3>
+                </div>
+                <div class="p-4">
+                    <textarea x-model="refinePrompt"
+                              class="w-full h-32 p-3 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+                              placeholder="Describe the renovation style..."></textarea>
+                </div>
+                <div class="p-4 border-t border-slate-200 flex justify-end gap-3">
+                    <button @click="refineModalOpen = false" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-800 transition">Cancel</button>
+                    <button @click="submitRefine()" :disabled="refineLoading"
+                            class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 flex items-center gap-2">
+                        <span x-show="!refineLoading">Regenerate</span>
+                        <span x-show="refineLoading" class="flex items-center gap-2">
+                            <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                            </svg>
+                            Processing...
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function propertyPulse() {
+            return {
+                url: '',
+                loading: false,
+                jobId: new URLSearchParams(window.location.search).get('job_id'),
+                progress: 0,
+                currentStage: '',
+                propertyInfo: null,
+                reasoningSteps: [],
+                results: null,
+                eventSource: null,
+                recentJobs: [],
+                refineModalOpen: false,
+                refinePrompt: '',
+                refineRoomKey: '',
+                refineLoading: false,
+
+                init() {
+                    if (this.jobId) {
+                        this.loading = true;
+                        this.pollForResults();
+                    } else {
+                        this.fetchRecentJobs();
+                    }
+                },
+
+                // Condition score to label conversion
+                getConditionLabel(score) {
+                    if (score <= 3) return 'Poor';
+                    if (score <= 5) return 'Fair';
+                    if (score <= 7) return 'Good';
+                    return 'Great';
+                },
+
+                getConditionClass(score) {
+                    if (score <= 3) return 'bg-red-100 text-red-700';
+                    if (score <= 5) return 'bg-amber-100 text-amber-700';
+                    if (score <= 7) return 'bg-blue-100 text-blue-700';
+                    return 'bg-emerald-100 text-emerald-700';
+                },
+
+                async fetchRecentJobs() {
+                    try {
+                        const response = await fetch('/jobs/recent');
+                        this.recentJobs = await response.json();
+                    } catch (e) {}
+                },
+
+                loadJob(id) {
+                    this.jobId = id;
+                    this.results = null;  // Reset results so poll loop runs
+                    this.propertyInfo = null;
+                    this.reasoningSteps = [];
+                    this.progress = 0;
+                    this.currentStage = 'Loading report...';
+                    window.history.pushState({}, '', `?job_id=${id}`);
+                    this.pollForResults();
+                },
+
+                async deleteJob(id) {
+                    if (!confirm('Delete this analysis?')) return;
+                    try {
+                        await fetch(`/analyze/${id}`, { method: 'DELETE' });
+                        this.recentJobs = this.recentJobs.filter(j => j.job_id !== id);
+                        if (this.jobId === id) {
+                            this.reset();
+                        }
+                    } catch (e) {
+                        alert('Failed to delete');
+                    }
+                },
+
+                cancelAnalysis() {
+                    this.eventSource?.close();
+                    this.reset();
+                },
+
+                openRefine(roomKey, currentPrompt) {
+                    this.refineRoomKey = roomKey;
+                    this.refinePrompt = currentPrompt;
+                    this.refineModalOpen = true;
+                },
+
+                async submitRefine() {
+                    if (!this.refinePrompt || this.refineLoading) return;
+                    this.refineLoading = true;
+
+                    try {
+                        const response = await fetch(`/analyze/${this.jobId}/refine/${this.refineRoomKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ prompt: this.refinePrompt })
+                        });
+                        if (!response.ok) throw new Error('Failed');
+                        const data = await response.json();
+
+                        if (this.results?.after_images?.[this.refineRoomKey]) {
+                            this.results.after_images[this.refineRoomKey].generated_image = data.generated_image;
+                        }
+                        this.refineModalOpen = false;
+                    } catch (e) {
+                        alert('Failed to regenerate');
+                    } finally {
+                        this.refineLoading = false;
+                    }
+                },
+
+                async startAnalysis() {
+                    if (!this.url || this.loading) return;
+                    this.loading = true;
+                    this.reasoningSteps = [];
+                    this.progress = 0;
+
+                    try {
+                        const response = await fetch('/analyze', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: this.url })
+                        });
+                        const data = await response.json();
+                        this.jobId = data.job_id;
+                        this.loading = false;
+                        window.history.pushState({}, '', `?job_id=${this.jobId}`);
+                        this.connectSSE();
+                    } catch (error) {
+                        this.addStep('error', 'Connection Error', error.message);
+                        this.loading = false;
+                    }
+                },
+
+                connectSSE() {
+                    this.eventSource = new EventSource(`/analyze/${this.jobId}/stream`);
+                    this.eventSource.onmessage = (e) => this.handleUpdate(JSON.parse(e.data));
+                    this.eventSource.onerror = () => {
+                        this.eventSource.close();
+                        this.pollForResults();
+                    };
+                },
+
+                handleUpdate(data) {
+                    if (data.type === 'progress') {
+                        this.progress = data.progress || this.progress;
+                        this.currentStage = data.stage || this.currentStage;
+                    }
+                    if (data.type === 'property_info') this.propertyInfo = data.data;
+                    if (data.type === 'reasoning') this.addStep(data.step_type || 'info', data.title, data.detail);
+                    if (data.type === 'complete') {
+                        this.eventSource?.close();
+                        this.results = data.results;
+                    }
+                    if (data.type === 'error') {
+                        this.addStep('error', 'Error', data.message);
+                        this.eventSource?.close();
+                    }
+                },
+
+                getStepEmoji(type) {
+                    return { thinking: '🧠', strategy: '💭', analyzing: '🔍', success: '✅', error: '❌', info: '📊', image: '🎨', warning: '⚠️', decision: '🎯', cost: '💰' }[type] || '▸';
+                },
+
+                addStep(type, title, detail = null) {
+                    const time = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    this.reasoningSteps.push({ type, title, detail, time, emoji: this.getStepEmoji(type) });
+                    this.$nextTick(() => {
+                        if (this.$refs.reasoningLog) this.$refs.reasoningLog.scrollTop = this.$refs.reasoningLog.scrollHeight;
+                    });
+                },
+
+                async pollForResults() {
+                    while (this.jobId && !this.results) {
+                        try {
+                            const response = await fetch(`/analyze/${this.jobId}`);
+                            if (response.status === 404) { this.loading = false; break; }
+                            const data = await response.json();
+                            if (data.status === 'complete') { this.results = data; this.loading = false; break; }
+                            if (data.status === 'error') { this.addStep('error', 'Failed', data.error); this.loading = false; break; }
+                            await new Promise(r => setTimeout(r, 2000));
+                        } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+                    }
+                },
+
+                reset() {
+                    this.eventSource?.close();
+                    this.url = '';
+                    this.jobId = null;
+                    this.progress = 0;
+                    this.currentStage = '';
+                    this.propertyInfo = null;
+                    this.reasoningSteps = [];
+                    this.results = null;
+                    this.loading = false;
+                    window.history.pushState({}, '', window.location.pathname);
+                    this.fetchRecentJobs();
+                }
+            };
+        }
+    </script>
+</body>
+</html>
